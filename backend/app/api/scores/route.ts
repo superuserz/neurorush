@@ -14,7 +14,7 @@ const SubmitScoreSchema = z.object({
   accuracy: z.number().min(0).max(100),
   rounds: z.number().int().min(1),
   coins: z.number().int().min(0),
-  mode: z.enum(['bubble', 'daily']).default('bubble'),
+  mode: z.enum(['trivia', 'galactic', 'daily']).default('trivia'),
 });
 
 export async function POST(req: NextRequest) {
@@ -53,11 +53,15 @@ export async function POST(req: NextRequest) {
 
     const score = await Score.create(data);
 
-    // Update user high score
+    // Update user high score (overall + per-mode for trivia/galactic)
+    const maxUpdate: Record<string, number> = { highestScore: data.score };
+    if (data.mode === 'trivia' || data.mode === 'galactic') {
+      maxUpdate[`highestScores.${data.mode}`] = data.score;
+    }
     await User.findOneAndUpdate(
       { userId: data.userId },
       {
-        $max: { highestScore: data.score },
+        $max: maxUpdate,
         $inc: { totalGames: 1, xp: Math.floor(data.score / 10) },
         $setOnInsert: { username: data.username },
       },

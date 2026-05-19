@@ -12,7 +12,8 @@ export default function ResultsScreen() {
   const router = useRouter();
   const { session } = useGameStore();
   const profile = useUserStore((s) => s.profile);
-  const isNewBest = session.score >= (profile?.highestScore ?? 0);
+  const triviaBest = profile?.highestScores?.trivia ?? 0;
+  const isNewBest = session.score >= triviaBest;
 
   const accuracy = session.correctAnswers + session.wrongAnswers > 0
     ? Math.round((session.correctAnswers / (session.correctAnswers + session.wrongAnswers)) * 100)

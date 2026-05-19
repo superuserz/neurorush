@@ -9,6 +9,7 @@ export interface IUser extends Document {
   avatar?: string;
   totalCoins: number;
   highestScore: number;
+  highestScores: { trivia: number; galactic: number };
   totalGames: number;
   longestStreak: number;
   currentStreak: number;
@@ -29,6 +30,10 @@ const UserSchema = new Schema<IUser>(
     avatar: { type: String },
     totalCoins: { type: Number, default: 500, min: 0 },
     highestScore: { type: Number, default: 0, min: 0 },
+    highestScores: {
+      trivia: { type: Number, default: 0, min: 0 },
+      galactic: { type: Number, default: 0, min: 0 },
+    },
     totalGames: { type: Number, default: 0, min: 0 },
     longestStreak: { type: Number, default: 0, min: 0 },
     currentStreak: { type: Number, default: 0, min: 0 },

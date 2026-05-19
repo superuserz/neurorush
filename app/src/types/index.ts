@@ -1,4 +1,4 @@
-export type GameMode = 'bubble' | 'daily';
+export type GameMode = 'trivia' | 'galactic' | 'daily';
 
 export interface Bubble {
   id: string;
@@ -15,19 +15,6 @@ export interface Bubble {
   color: string;
   glowColor: string;
   squishTick: number;
-  value?: number;    // burst mode: score value of this bubble
-  colorKey?: string; // burst mode: color identifier for chain bonus
-}
-
-export interface BurstSession {
-  score: number;
-  combo: number;
-  maxCombo: number;
-  coins: number;
-  lives: number;
-  bubblesPopped: number;
-  timeRemaining: number;
-  highestBank: number;
 }
 
 export interface Question {
@@ -103,6 +90,7 @@ export interface UserProfile {
   avatar?: string;
   totalCoins: number;
   highestScore: number;
+  highestScores: { trivia: number; galactic: number };
   totalGames: number;
   longestStreak: number;
   currentStreak: number;

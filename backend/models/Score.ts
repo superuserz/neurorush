@@ -8,7 +8,7 @@ export interface IScore extends Document {
   accuracy: number;
   rounds: number;
   coins: number;
-  mode: 'bubble' | 'daily';
+  mode: 'trivia' | 'galactic' | 'daily';
   createdAt: Date;
 }
 
@@ -21,12 +21,14 @@ const ScoreSchema = new Schema<IScore>(
     accuracy: { type: Number, default: 0, min: 0, max: 100 },
     rounds: { type: Number, default: 1 },
     coins: { type: Number, default: 0 },
-    mode: { type: String, enum: ['bubble', 'daily'], default: 'bubble' },
+    mode: { type: String, enum: ['trivia', 'galactic', 'daily'], default: 'trivia' },
   },
   { timestamps: true }
 );
 
 ScoreSchema.index({ score: -1 });
 ScoreSchema.index({ userId: 1, score: -1 });
+ScoreSchema.index({ mode: 1, score: -1 });
+ScoreSchema.index({ mode: 1, userId: 1, score: -1 });
 
 export const Score = mongoose.models.Score || mongoose.model<IScore>('Score', ScoreSchema);

@@ -8,7 +8,7 @@ interface UserState {
   loadProfile: () => Promise<void>;
   saveProfile: (profile: UserProfile) => Promise<void>;
   updateCoins: (delta: number) => void;
-  updateHighScore: (score: number) => void;
+  updateHighScore: (score: number, mode?: 'trivia' | 'galactic') => void;
   addXP: (xp: number) => void;
   incrementStreak: () => void;
   resetStreak: () => void;
@@ -24,6 +24,7 @@ const defaultProfile: UserProfile = {
   username: 'Player',
   totalCoins: 500,
   highestScore: 0,
+  highestScores: { trivia: 0, galactic: 0 },
   totalGames: 0,
   longestStreak: 0,
   currentStreak: 0,
@@ -66,12 +67,20 @@ export const useUserStore = create<UserState>((set, get) => ({
       return { profile: updated };
     }),
 
-  updateHighScore: (score) =>
+  updateHighScore: (score, mode) =>
     set((state) => {
-      if (!state.profile || score <= state.profile.highestScore) return state;
-      const updated = {
+      if (!state.profile) return state;
+      const prevScores = state.profile.highestScores ?? { trivia: 0, galactic: 0 };
+      const prevModeBest = mode ? prevScores[mode] : 0;
+      const beatsOverall = score > state.profile.highestScore;
+      const beatsMode = mode && score > prevModeBest;
+      if (!beatsOverall && !beatsMode) return state;
+      const updated: UserProfile = {
         ...state.profile,
-        highestScore: score,
+        highestScore: Math.max(state.profile.highestScore, score),
+        highestScores: mode
+          ? { ...prevScores, [mode]: Math.max(prevModeBest, score) }
+          : prevScores,
         totalGames: state.profile.totalGames + 1,
       };
       get().saveProfile(updated);

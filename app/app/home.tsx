@@ -15,15 +15,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
 import { NeonText, GradientButton, CoinDisplay, TiltCard } from '../src/components/ui';
 import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { api } from '../src/services/api';
+import { googleSignIn } from '../src/services/googleAuth';
 import { Colors, Spacing } from '../src/theme';
-
-WebBrowser.maybeCompleteAuthSession();
 
 const { width, height } = Dimensions.get('window');
 
@@ -126,25 +123,25 @@ export default function HomeScreen() {
   const { isSignedIn, user: googleUser, signIn } = useAuthStore();
   const [signingIn, setSigningIn] = useState(false);
 
-  const [, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-    scopes: ['openid', 'profile', 'email'],
-  });
-
-  useEffect(() => {
-    if (response?.type !== 'success') return;
-    const accessToken = response.authentication?.accessToken;
-    if (!accessToken) return;
+  const handleGoogleSignIn = async () => {
+    if (signingIn) return;
     setSigningIn(true);
-    api.googleAuth(accessToken)
-      .then(({ token, user }) =>
-        signIn(token, { userId: user.userId, username: user.username, email: user.email, avatar: user.avatar })
-      )
-      .catch(() => Alert.alert('Sign-in failed', 'Please try again.'))
-      .finally(() => setSigningIn(false));
-  }, [response]);
-
-  const handleGoogleSignIn = () => promptAsync();
+    try {
+      const result = await googleSignIn();
+      if (!result) return; // user cancelled
+      const { token, user } = await api.googleAuth(result.idToken);
+      await signIn(token, {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+      });
+    } catch {
+      Alert.alert('Sign-in failed', 'Please try again.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
 
   // Logo pulse
   const pulse = useSharedValue(1);
@@ -287,7 +284,7 @@ export default function HomeScreen() {
           <Animated.View entering={FadeInDown.delay(300).duration(400)} style={styles.ctaSection}>
             <GradientButton
               label="TAP TO START"
-              onPress={() => router.push('/game')}
+              onPress={() => router.push('/galactic-intro')}
               gradient={Colors.gradient.primary}
               size="lg"
               style={styles.mainCta}
@@ -298,9 +295,9 @@ export default function HomeScreen() {
           <Animated.View entering={FadeInDown.delay(380).duration(400)}>
             <NeonText size="xs" color={Colors.text.muted} style={styles.sectionLabel}>CHOOSE MODE</NeonText>
             <View style={styles.modeGrid}>
-              <ModeCard icon="💥" title="BUBBLE BURST" desc="Chain · Fever · Bank"
-                gradient={['#CC0066', '#FF0099', '#FF66CC'] as const}
-                onPress={() => router.push('/burst-intro')} badge="NEW" />
+              <ModeCard icon="🚀" title="GALACTIC BATTLE" desc="Shoot · Survive · Bosses"
+                gradient={['#001144', '#0044AA', '#00AAFF'] as const}
+                onPress={() => router.push('/galactic-intro')} badge="NEW" />
               <ModeCard icon="🧠" title="TRIVIA BLITZ" desc="Pop the right answer"
                 gradient={['#6600CC', '#9900FF', '#CC00FF'] as const}
                 onPress={() => router.push('/game')} />

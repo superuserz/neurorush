@@ -12,11 +12,18 @@ import { Colors, Spacing } from '../src/theme';
 import type { LeaderboardEntry } from '../src/types';
 
 type Period = 'global' | 'daily' | 'weekly';
+type Mode = 'galactic' | 'trivia';
+
+const MODES: { key: Mode; label: string; icon: string }[] = [
+  { key: 'galactic', label: 'GALACTIC', icon: '⭐' },
+  { key: 'trivia', label: 'TRIVIA', icon: '⚡' },
+];
 
 export default function LeaderboardScreen() {
   const router = useRouter();
   const { isSignedIn, user: googleUser } = useAuthStore();
   const profile = useUserStore((s) => s.profile);
+  const [mode, setMode] = useState<Mode>('galactic');
   const [period, setPeriod] = useState<Period>('global');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [userRank, setUserRank] = useState<number | null>(null);
@@ -33,7 +40,7 @@ export default function LeaderboardScreen() {
       setError(null);
 
       try {
-        const data = await api.getLeaderboard(period, activeUserId);
+        const data = await api.getLeaderboard(period, mode, activeUserId);
         setEntries(data.entries);
         setUserRank(data.userRank);
       } catch {
@@ -43,7 +50,7 @@ export default function LeaderboardScreen() {
         setRefreshing(false);
       }
     },
-    [period, activeUserId]
+    [period, mode, activeUserId]
   );
 
   useEffect(() => {
@@ -56,8 +63,32 @@ export default function LeaderboardScreen() {
   return (
     <LinearGradient colors={['#0A0015', '#1A0035', '#0A0015']} style={styles.container}>
       <SafeAreaView style={styles.safe}>
+        {/* Mode segment (top of screen) */}
+        <Animated.View entering={FadeInDown.duration(400)} style={styles.modeSegment}>
+          {MODES.map((m) => {
+            const active = mode === m.key;
+            return (
+              <TouchableOpacity
+                key={m.key}
+                style={[styles.modeSegmentItem, active && styles.modeSegmentItemActive]}
+                onPress={() => setMode(m.key)}
+                activeOpacity={0.75}
+              >
+                <NeonText
+                  size="sm"
+                  bold
+                  glow={active}
+                  color={active ? Colors.white : Colors.text.muted}
+                >
+                  {m.icon} {m.label}
+                </NeonText>
+              </TouchableOpacity>
+            );
+          })}
+        </Animated.View>
+
         {/* Header */}
-        <Animated.View entering={FadeInDown.duration(400)} style={styles.header}>
+        <Animated.View entering={FadeInDown.delay(80).duration(400)} style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.back}>
             <NeonText size="xl" color={Colors.text.secondary}>←</NeonText>
           </TouchableOpacity>
@@ -195,6 +226,26 @@ function LeaderboardRow({ entry, isUser }: { entry: LeaderboardEntry; isUser: bo
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safe: { flex: 1 },
+  modeSegment: {
+    flexDirection: 'row',
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.bg.card,
+    borderRadius: 14,
+    padding: 4,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.neon.purple + '33',
+  },
+  modeSegmentItem: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    alignItems: 'center',
+    borderRadius: 10,
+  },
+  modeSegmentItemActive: {
+    backgroundColor: Colors.neon.purple + '55',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -279,7 +279,7 @@ export default function GameScreen() {
     if (physicsRef.current) clearInterval(physicsRef.current);
     sound.gameOver();
     endGame();
-    updateHighScore(session.score);
+    updateHighScore(session.score, 'trivia');
     updateCoins(session.coins);
     addXP(Math.floor(session.score / 10));
 
@@ -293,7 +293,7 @@ export default function GameScreen() {
       accuracy,
       rounds: session.round,
       coins: session.coins,
-      mode: 'bubble',
+      mode: 'trivia',
     }).catch(() => {});
 
     setTimeout(() => router.replace('/results'), 1000);

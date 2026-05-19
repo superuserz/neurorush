@@ -5,8 +5,10 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
+import { configureGoogleSignIn } from '../src/services/googleAuth';
 
 const queryClient = new QueryClient();
+configureGoogleSignIn();
 
 export default function RootLayout() {
   const loadProfile = useUserStore((s) => s.loadProfile);
@@ -30,7 +32,8 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" />
           <Stack.Screen name="home" />
-          <Stack.Screen name="burst-intro" />
+          <Stack.Screen name="galactic-intro" />
+          <Stack.Screen name="galactic" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="game" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="results" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="leaderboard" />

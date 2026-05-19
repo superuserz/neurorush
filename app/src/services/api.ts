@@ -42,10 +42,10 @@ export interface GoogleAuthResponse {
 }
 
 export const api = {
-  googleAuth: (accessToken: string) =>
+  googleAuth: (idToken: string) =>
     request<GoogleAuthResponse>('/api/auth/google', {
       method: 'POST',
-      body: JSON.stringify({ accessToken }),
+      body: JSON.stringify({ idToken }),
     }),
 
   submitScore: (data: {
@@ -56,12 +56,21 @@ export const api = {
     accuracy: number;
     rounds: number;
     coins: number;
-    mode?: 'bubble' | 'daily';
+    mode?: 'trivia' | 'galactic' | 'daily';
   }) => request('/api/scores', { method: 'POST', body: JSON.stringify(data) }),
 
-  getLeaderboard: (period: 'global' | 'daily' | 'weekly', userId?: string) =>
-    request<{ entries: LeaderboardEntry[]; userRank: number | null; period: string }>(
-      `/api/leaderboard?period=${period}${userId ? `&userId=${userId}` : ''}`
+  getLeaderboard: (
+    period: 'global' | 'daily' | 'weekly',
+    mode: 'trivia' | 'galactic' | 'daily',
+    userId?: string
+  ) =>
+    request<{
+      entries: LeaderboardEntry[];
+      userRank: number | null;
+      period: string;
+      mode: string;
+    }>(
+      `/api/leaderboard?period=${period}&mode=${mode}${userId ? `&userId=${userId}` : ''}`
     ),
 
   upsertUser: (data: {

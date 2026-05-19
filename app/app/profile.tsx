@@ -1,21 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Image, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import Animated, { FadeInDown, ZoomIn } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
-import { makeRedirectUri } from 'expo-auth-session';
 import { NeonText, NeonCard, GradientButton, CoinDisplay } from '../src/components/ui';
 import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { api } from '../src/services/api';
+import { googleSignIn, googleSignOut } from '../src/services/googleAuth';
 import { Colors, Spacing } from '../src/theme';
-
-WebBrowser.maybeCompleteAuthSession();
-
-const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID;
 
 const ACHIEVEMENTS = [
   { id: 'a1', icon: '🎯', title: 'First Pop', desc: 'Pop your first bubble', unlocked: true },
@@ -32,49 +26,37 @@ export default function ProfileScreen() {
   const { isSignedIn, user: googleUser, signIn, signOut } = useAuthStore();
   const [signingIn, setSigningIn] = useState(false);
 
-  const redirectUri = makeRedirectUri({ native: 'neurorush://' });
-
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: GOOGLE_CLIENT_ID,
-    redirectUri,
-    scopes: ['openid', 'profile', 'email'],
-  });
-
-  useEffect(() => {
-    if (response?.type !== 'success') return;
-    const accessToken = response.authentication?.accessToken;
-    if (!accessToken) return;
-
+  const handleSignIn = async () => {
+    if (signingIn) return;
     setSigningIn(true);
-    api
-      .googleAuth(accessToken)
-      .then(({ token, user }) => {
-        signIn(token, {
-          userId: user.userId,
-          username: user.username,
-          email: user.email,
-          avatar: user.avatar,
-        });
-      })
-      .catch(() => Alert.alert('Sign-in failed', 'Please try again.'))
-      .finally(() => setSigningIn(false));
-  }, [response]);
-
-  const handleSignIn = () => {
-    if (!GOOGLE_CLIENT_ID) {
-      Alert.alert(
-        'Not configured',
-        'EXPO_PUBLIC_GOOGLE_CLIENT_ID is not set. Add it to your Vercel environment variables.'
-      );
-      return;
+    try {
+      const result = await googleSignIn();
+      if (!result) return;
+      const { token, user } = await api.googleAuth(result.idToken);
+      await signIn(token, {
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+      });
+    } catch {
+      Alert.alert('Sign-in failed', 'Please try again.');
+    } finally {
+      setSigningIn(false);
     }
-    promptAsync();
   };
 
   const handleSignOut = () => {
     Alert.alert('Sign out', 'Sign out of your Google account?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: signOut },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await googleSignOut();
+          await signOut();
+        },
+      },
     ]);
   };
 
@@ -149,7 +131,8 @@ export default function ProfileScreen() {
 
           {/* Stats */}
           <Animated.View entering={FadeInDown.delay(350).duration(400)} style={styles.statsGrid}>
-            <StatBox icon="🏆" label="Best Score" value={(profile?.highestScore ?? 0).toLocaleString()} color={Colors.neon.yellow} />
+            <StatBox icon="⭐" label="Best Galactic" value={(profile?.highestScores?.galactic ?? 0).toLocaleString()} color={Colors.neon.cyan} />
+            <StatBox icon="⚡" label="Best Trivia" value={(profile?.highestScores?.trivia ?? 0).toLocaleString()} color={Colors.neon.yellow} />
             <StatBox icon="🎮" label="Total Games" value={String(profile?.totalGames ?? 0)} color={Colors.neon.blue} />
             <StatBox icon="🔥" label="Best Streak" value={String(profile?.longestStreak ?? 0)} color={Colors.neon.orange} />
             <StatBox icon="🪙" label="Total Coins" value={(profile?.totalCoins ?? 0).toLocaleString()} color={Colors.game.coin} />

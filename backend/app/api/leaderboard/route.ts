@@ -4,8 +4,11 @@ import { Score } from '../../../models/Score';
 import { rateLimit } from '../../../middleware/rateLimit';
 
 type Period = 'global' | 'daily' | 'weekly';
+type Mode = 'trivia' | 'galactic' | 'daily';
 
-function getPeriodFilter(period: Period) {
+const VALID_MODES: readonly Mode[] = ['trivia', 'galactic', 'daily'];
+
+function getPeriodFilter(period: Period): Record<string, unknown> {
   const now = new Date();
   if (period === 'daily') {
     const start = new Date(now);
@@ -26,16 +29,20 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const period = (searchParams.get('period') ?? 'global') as Period;
+  const mode = (searchParams.get('mode') ?? 'trivia') as Mode;
   const userId = searchParams.get('userId');
   const limit = Math.min(Number(searchParams.get('limit') ?? 50), 100);
 
   if (!['global', 'daily', 'weekly'].includes(period)) {
     return NextResponse.json({ error: 'Invalid period' }, { status: 400 });
   }
+  if (!VALID_MODES.includes(mode)) {
+    return NextResponse.json({ error: 'Invalid mode' }, { status: 400 });
+  }
 
   try {
     await connectDB();
-    const filter = getPeriodFilter(period);
+    const filter = { ...getPeriodFilter(period), mode };
 
     const pipeline = [
       { $match: filter },
@@ -79,7 +86,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ entries: ranked, userRank, period });
+    return NextResponse.json({ entries: ranked, userRank, period, mode });
   } catch (err) {
     console.error('[GET /api/leaderboard]', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
