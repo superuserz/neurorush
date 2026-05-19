@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, useCallback, memo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, memo } from 'react';
 import { View, StyleSheet, Dimensions, TouchableOpacity, Text, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
   withTiming,
   withSequence,
   withRepeat,
@@ -15,9 +16,11 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, {
-  Polygon, Circle as SvgCircle, Defs,
+  Polygon, Polyline, Circle as SvgCircle, Path as SvgPath, Defs,
   LinearGradient as SvgLinearGradient, Stop,
 } from 'react-native-svg';
+
+const AnimatedSvgCircle = Animated.createAnimatedComponent(SvgCircle);
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -30,20 +33,22 @@ import { sound } from '../src/services/SoundService';
 import { Colors, Spacing } from '../src/theme';
 import {
   Enemy, PlayerProjectile, EnemyProjectile, PowerUpDrop, Particle, Boss,
-  Card,
+  Card, LightningBolt,
   PLAYER_RADIUS, PLAYER_BASE_HP, PLAYER_SHIELD_MAX,
   PROJECTILE_BASE_DAMAGE, PROJECTILE_BASE_FIRE_MS, PROJECTILE_RADIUS,
+  PROJECTILE_VISUAL_W, PROJECTILE_VISUAL_H,
   ENEMY_PROJ_RADIUS,
   POWERUP_RADIUS, POWERUP_LIFETIME_MS,
   COMBO_TIMEOUT_MS, FEVER_THRESHOLD, FEVER_DURATION_MS, FEVER_FIRE_MULT,
   STAGE_TIME_SECONDS, BOSS_STAGE_INTERVAL, MAX_ENEMIES, MAX_PROJECTILES,
   BOMB_DAMAGE, BOMB_RADIUS, EMP_DURATION_MS, MISSILE_AOE_RADIUS,
+  LIGHTNING_LIFETIME_MS, LIGHTNING_SPLASH_RADIUS,
   getStageConfig, spawnPattern, pickPattern, spawnBoss,
   updateEnemies, updatePlayerProjectiles, updateEnemyProjectiles,
   updatePowerUps, updateParticles, updateBoss, circleHit,
   rollDamage, calcKillScore, findExplosionTargets, splitChildren,
   makeExplosionParticles, makePlayerProjectile, makeSpreadShot,
-  makeMissile, steerHomingProjectiles,
+  makeMissile, steerHomingProjectiles, makeLightningBolt,
   maybeDropPowerUp, powerUpLabel,
   rollCardOptions,
 } from '../src/game-engine/GalacticEngine';
@@ -66,11 +71,11 @@ const nid = (p: string) => `${p}_${++_idc}_${Math.random().toString(36).slice(2,
 export default function GalacticScreen() {
   const router = useRouter();
   const {
-    session, isPlaying, feverActive, active, buffs, inventory,
+    session, isPlaying, feverActive, active, buffs, inventory, ammo,
     startGame, endGame, addScore, incrementCombo, resetCombo,
     takeDamage, heal, addShield, addCoins, incrementKill, incrementBossKill,
     advanceStage, triggerFever, endFever, tickTime, activatePower, tickPowers,
-    applyBuff, addInventory, consumeInventory,
+    applyBuff, addInventory, consumeInventory, consumeLightning,
   } = useGalacticStore();
   const { updateCoins, updateHighScore, addXP } = useUserStore();
   const profile = useUserStore((s) => s.profile);
@@ -89,6 +94,7 @@ export default function GalacticScreen() {
   const [gameOver, setGameOver] = useState(false);
   // Between-stage 1-of-3 pick modal
   const [pickOptions, setPickOptions] = useState<Card[] | null>(null);
+  const [bolts, setBolts] = useState<LightningBolt[]>([]);
 
   // ── Refs (sync with state for tick loop) ──────────────────────────────────
   const enemiesRef   = useRef<Enemy[]>([]);
@@ -119,6 +125,11 @@ export default function GalacticScreen() {
   const pickActiveRef = useRef(false);            // tick early-returns while modal up
   const picksUntilNextRef = useRef(2);            // counts down on each stage-advance
   const empUntilRef = useRef(0);                  // EMP active item — freeze enemies until ms
+  // Lightning bolts queued by tap gesture — drained at the start of each tick so
+  // damage is applied inside the simulation loop (no setState races).
+  const pendingBoltsRef = useRef<LightningBolt[]>([]);
+  const boltsRef = useRef<LightningBolt[]>([]);
+  boltsRef.current = bolts;
 
   enemiesRef.current = enemies;
   pProjsRef.current = pProjs;
@@ -154,6 +165,22 @@ export default function GalacticScreen() {
       playerX.value = nx;
       playerY.value = ny;
     });
+
+  // ── Tap gesture: quick tap (no drag) fires lightning ammo if available ───
+  const fireLightningRef = useRef<() => void>(() => {});
+  const tap = Gesture.Tap()
+    .maxDuration(220)
+    .maxDistance(10)
+    .onEnd((_e, ok) => {
+      if (!ok) return;
+      // Bridge from the gesture worklet thread to JS thread.
+      // runOnJS isn't needed when calling a JS-thread ref — the gesture-handler v2
+      // .onEnd callback runs on JS by default unless prefixed with `runOnJS`.
+      fireLightningRef.current?.();
+    });
+
+  // Compose: tap wins if it recognizes first (short, no movement); otherwise pan.
+  const playGesture = Gesture.Race(tap, pan);
 
   const playerStyle = useAnimatedStyle(() => ({
     transform: [
@@ -236,6 +263,19 @@ export default function GalacticScreen() {
     const t = setTimeout(() => setStreakBanner(null), 900);
     return () => clearTimeout(t);
   }, [streakBanner]);
+
+  // Show unlock/replenish banner whenever lastReplenishAt changes.
+  const lastReplenishSeenRef = useRef(0);
+  useEffect(() => {
+    if (!ammo.lastReplenishAt || ammo.lastReplenishAt === lastReplenishSeenRef.current) return;
+    const isFirst = lastReplenishSeenRef.current === 0;
+    lastReplenishSeenRef.current = ammo.lastReplenishAt;
+    setStreakBanner({
+      text: isFirst ? '⚡ LIGHTNING UNLOCKED!' : `⚡ LIGHTNING +${ammo.lightningCharges}`,
+      color: Colors.neon.cyan,
+      key: ammo.lastReplenishAt,
+    });
+  }, [ammo.lastReplenishAt]);
 
   // ── Low-HP heartbeat + vignette controller ────────────────────────────────
   useEffect(() => {
@@ -348,6 +388,34 @@ export default function GalacticScreen() {
     activatePower('shield', 3000);
   }, [consumeInventory, addShield, activatePower]);
 
+  // ── Lightning fire — tap-triggered chain attack ─────────────────────────
+  const fireLightning = useCallback(() => {
+    if (gameOverRef.current || !isPlayingRef.current) return;
+    if (pickActiveRef.current) return;
+    // Quick precheck (no charge consumption yet) — must be unlocked + have charges.
+    const liveAmmo = useGalacticStore.getState().ammo;
+    if (!liveAmmo.lightningUnlocked || liveAmmo.lightningCharges <= 0) return;
+    // Build the bolt first; if there are no targets, don't burn a charge.
+    const bolt = makeLightningBolt(
+      playerX.value, playerY.value,
+      enemiesRef.current,
+      bossRef.current?.x ?? null,
+      bossRef.current?.y ?? null,
+      bossRef.current?.radius ?? null,
+    );
+    if (!bolt) return;
+    if (!consumeLightning()) return;
+    pendingBoltsRef.current.push(bolt);
+    setBolts((prev) => [...prev, bolt]);
+    sound.empBurst();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    triggerShake(8);
+    triggerHitstop(60);
+  }, [consumeLightning, triggerShake, triggerHitstop]);
+
+  // Bind the worklet-callable ref to the JS callback.
+  fireLightningRef.current = fireLightning;
+
   // ── Power-up pickup (non-nuke). Nuke is handled inline in the tick so it
   //    can clear local enemy state without racing the tick-end flush.
   const consumePowerUp = useCallback((d: PowerUpDrop) => {
@@ -427,6 +495,71 @@ export default function GalacticScreen() {
       let curDrops:   PowerUpDrop[]      = dropsRef.current.slice();
       let curParticles: Particle[]       = particlesRef.current.slice();
       let nextBoss = bossRef.current;
+
+      // ── Drain pending lightning bolts: apply hits to enemies + boss ──────
+      // The bolt itself was queued for render by the gesture handler; here we
+      // resolve damage inside the tick to avoid setState races with collision.
+      if (pendingBoltsRef.current.length) {
+        const pending = pendingBoltsRef.current;
+        pendingBoltsRef.current = [];
+        const scoreMul = liveBuffs.scoreMult * (liveActive.doubleScore > 0 ? 2 : 1);
+        for (const bolt of pending) {
+          for (const hit of bolt.hits) {
+            // Boss hit
+            if (hit.targetId === 'boss' && nextBoss) {
+              const dmg = Math.round(hit.damage);
+              nextBoss = { ...nextBoss, hp: Math.max(0, nextBoss.hp - dmg), hitFlash: 3 };
+              pushFloat(hit.x + (Math.random() - 0.5) * 30, hit.y - 20, `${dmg}`, Colors.neon.cyan);
+              continue;
+            }
+            // Enemy hit
+            const idx = curEnemies.findIndex((e) => e.id === hit.targetId);
+            if (idx < 0) continue;
+            const e = curEnemies[idx];
+            const dmg = Math.round(hit.damage);
+            const nextHp = Math.max(0, e.hp - dmg);
+            curEnemies[idx] = { ...e, hp: nextHp, hitFlash: 3 };
+            pushFloat(e.x + (Math.random() - 0.5) * 16, e.y - 18, `${dmg}`,
+              hit.splash ? Colors.neon.purple : Colors.neon.cyan);
+            if (nextHp <= 0) {
+              const pts = Math.round(calcKillScore(e, comboRef.current, feverRef.current) * scoreMul);
+              addScore(pts);
+              incrementKill();
+              incrementCombo();
+              trackKillForStreak();
+              comboTimerRef.current = COMBO_TIMEOUT_MS;
+              if (e.type === 'gold') { addCoins(5); sound.coinGet(); }
+              curParticles.push(...makeExplosionParticles(e.x, e.y, e.glow, 12));
+              pushFloat(e.x, e.y - 36, `+${pts}`, Colors.neon.cyan);
+              const drop = maybeDropPowerUp(e.x, e.y);
+              if (drop) curDrops.push(drop);
+              curEnemies[idx] = undefined as unknown as Enemy;
+            }
+          }
+        }
+        curEnemies = curEnemies.filter((e): e is Enemy => !!e);
+        if (nextBoss && nextBoss.hp <= 0) {
+          triggerShake(18);
+          triggerHitstop(280);
+          sound.bossDeath();
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          curParticles.push(...makeExplosionParticles(nextBoss.x, nextBoss.y, nextBoss.glow, 30));
+          incrementBossKill();
+          addScore(Math.round((2000 + stageRef.current * 500) * liveBuffs.scoreMult));
+          addCoins(25 + stageRef.current * 3);
+          setStreakBanner({ text: 'BOSS DOWN!', color: Colors.neon.yellow, key: Date.now() });
+          nextBoss = null;
+          handleAdvanceStage();
+          stageTimerRef.current = STAGE_TIME_SECONDS;
+        }
+      }
+
+      // ── Filter expired lightning bolts from render state ─────────────────
+      const now = Date.now();
+      const liveBolts = boltsRef.current.filter((b) => now - b.createdAt < LIGHTNING_LIFETIME_MS);
+      if (liveBolts.length !== boltsRef.current.length) {
+        setBolts(liveBolts);
+      }
 
       // ── Boss spawn / update ──────────────────────────────────────────────
       if (stageCfg.isBossStage && !nextBoss && !bossSpawnedThisStageRef.current) {
@@ -876,7 +1009,7 @@ export default function GalacticScreen() {
           )}
 
           {/* ── Gameplay layer (gesture-enabled) ── */}
-          <GestureDetector gesture={pan}>
+          <GestureDetector gesture={playGesture}>
             <Animated.View style={styles.playArea} collapsable={false}>
 
               {/* Enemies */}
@@ -894,11 +1027,16 @@ export default function GalacticScreen() {
                   style={[
                     styles.pProj,
                     {
-                      left: p.x - PROJECTILE_RADIUS,
-                      top: p.y - PROJECTILE_RADIUS * 3,
+                      left: p.x - PROJECTILE_VISUAL_W / 2,
+                      top: p.y - PROJECTILE_VISUAL_H / 2,
                     },
                   ]}
                 />
+              ))}
+
+              {/* Lightning bolts (binary-tree chain + splash pulses) */}
+              {bolts.map((b) => (
+                <LightningBoltView key={b.id} bolt={b} />
               ))}
 
               {/* Enemy projectiles */}
@@ -1017,6 +1155,13 @@ export default function GalacticScreen() {
               <InventoryButton icon="🛡" count={inventory.drone}   color={Colors.neon.blue}  onPress={useDrone} />
             )}
           </View>
+
+          {/* ── Lightning ammo HUD (left side) — tap anywhere to fire ── */}
+          {ammo.lightningUnlocked && (
+            <View style={styles.ammoColumn} pointerEvents="box-none">
+              <LightningAmmoBadge count={ammo.lightningCharges} lastReplenishAt={ammo.lastReplenishAt} />
+            </View>
+          )}
 
           {/* ── 1-of-3 Card Pick Modal ── */}
           {pickOptions && (
@@ -1172,6 +1317,7 @@ const EnemyDot = memo(function EnemyDot({ enemy }: { enemy: Enemy }) {
   const charging = enemy.laserCharging;
   const rageBoost = enemy.type === 'rage' ? 1 + (enemy.speedRamp ?? 0) * 0.2 : 1;
   const flash = (enemy.hitFlash ?? 0) > 0;
+  const damageFrac = Math.max(0, Math.min(1, 1 - enemy.hp / enemy.maxHp));
   return (
     <View
       pointerEvents="none"
@@ -1192,6 +1338,7 @@ const EnemyDot = memo(function EnemyDot({ enemy }: { enemy: Enemy }) {
         },
       ]}
     >
+      {damageFrac > 0.1 && <EnemyCracks id={enemy.id} radius={enemy.radius} damageFrac={damageFrac} />}
       {enemy.type === 'gold'   && <Text style={styles.enemyIcon}>★</Text>}
       {enemy.type === 'bomb'   && <Text style={styles.enemyIcon}>💣</Text>}
       {enemy.type === 'shield' && <Text style={styles.enemyIcon}>◈</Text>}
@@ -1208,31 +1355,315 @@ const EnemyDot = memo(function EnemyDot({ enemy }: { enemy: Enemy }) {
   );
 });
 
-// ── Boss visual ──────────────────────────────────────────────────────────────
-const BossView = memo(function BossView({ boss }: { boss: Boss }) {
-  const d = boss.radius * 2;
-  const flash = boss.hitFlash > 0;
+// ── Enemy crack overlay — progressive shatter as HP drops ─────────────────
+//
+// Stable jagged crack pattern seeded by enemy.id so it doesn't jitter between
+// frames. Lines are radial spokes from a slightly off-center origin, with
+// 1–3 lines visible based on damage fraction. White core stroke with neon
+// outer glow matches the lightning visual language.
+//
+const EnemyCracks = memo(function EnemyCracks({ id, radius, damageFrac }: { id: string; radius: number; damageFrac: number }) {
+  // Hash id → deterministic seed so cracks look unique-but-stable per enemy.
+  let seed = 0;
+  for (let i = 0; i < id.length; i++) seed = (seed * 31 + id.charCodeAt(i)) | 0;
+  const rand = (n: number) => {
+    seed = (seed * 1103515245 + 12345) | 0;
+    return ((seed >>> 16) % 1000) / 1000 * n;
+  };
+
+  // Origin slightly off-center where the impact landed.
+  const ox = radius + (rand(radius * 0.5) - radius * 0.25);
+  const oy = radius + (rand(radius * 0.5) - radius * 0.25);
+
+  // Number of cracks scales with damage: ~1 at 10%, 2 at 50%, 3 at 75%, 4 near death.
+  const count = damageFrac > 0.75 ? 4 : damageFrac > 0.5 ? 3 : damageFrac > 0.25 ? 2 : 1;
+
+  // Each crack: 3-segment polyline from origin to a point near the rim.
+  const cracks: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const angle = rand(Math.PI * 2);
+    const reach = radius * (0.75 + rand(0.25));
+    const tx = ox + Math.cos(angle) * reach;
+    const ty = oy + Math.sin(angle) * reach;
+    // Two intermediate kinks with small perpendicular jitter.
+    const k1x = ox + Math.cos(angle) * reach * 0.35 + (rand(6) - 3);
+    const k1y = oy + Math.sin(angle) * reach * 0.35 + (rand(6) - 3);
+    const k2x = ox + Math.cos(angle) * reach * 0.7 + (rand(6) - 3);
+    const k2y = oy + Math.sin(angle) * reach * 0.7 + (rand(6) - 3);
+    cracks.push(`${ox},${oy} ${k1x},${k1y} ${k2x},${k2y} ${tx},${ty}`);
+  }
+
+  const d = radius * 2;
   return (
-    <View
-      pointerEvents="none"
-      style={[
-        styles.boss,
-        {
-          left: boss.x - boss.radius,
-          top: boss.y - boss.radius,
-          width: d,
-          height: d,
-          borderRadius: boss.radius,
-          backgroundColor: flash ? '#FFFFFF' : (boss.rage ? Colors.neon.red : boss.color),
-          shadowColor: boss.glow,
-          shadowOpacity: 1,
-          shadowRadius: boss.radius * 0.8,
-          borderColor: boss.glow,
-        },
-      ]}
-    >
-      <Text style={styles.bossIcon}>{boss.rage ? '☠' : '⬢'}</Text>
+    <Svg width={d} height={d} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+      {cracks.map((pts, i) => (
+        <React.Fragment key={i}>
+          {/* dark outer */}
+          <Polyline points={pts} stroke="#000" strokeOpacity={0.55} strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          {/* bright core */}
+          <Polyline points={pts} stroke="#FFFFFF" strokeOpacity={Math.min(1, 0.45 + damageFrac * 0.6)} strokeWidth={1} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </React.Fragment>
+      ))}
+      {/* small impact dot at origin once cracks reach mid-damage */}
+      {damageFrac > 0.4 && (
+        <SvgCircle cx={ox} cy={oy} r={1.6} fill="#FFFFFF" opacity={0.85} />
+      )}
+    </Svg>
+  );
+});
+
+// ── Boss visual — large neon galactic ship ────────────────────────────────
+//
+// Replaces the original bubble. Uses an SVG hull with swept wings, glowing
+// cockpit, layered halo, twin thruster jets. Rage flips the palette to red.
+// Collision still uses boss.radius — the visual extends slightly beyond that
+// so the hitbox feels fair.
+//
+const BossView = memo(function BossView({ boss }: { boss: Boss }) {
+  const halo = useSharedValue(0.55);
+  const thrust = useSharedValue(1);
+  useEffect(() => {
+    halo.value = withRepeat(withSequence(
+      withTiming(0.95, { duration: 900 }),
+      withTiming(0.45, { duration: 900 }),
+    ), -1, true);
+    thrust.value = withRepeat(withSequence(
+      withTiming(1.35, { duration: 110 }),
+      withTiming(0.7, { duration: 110 }),
+    ), -1, true);
+  }, []);
+  const haloStyle = useAnimatedStyle(() => ({ opacity: halo.value }));
+  const thrustStyle = useAnimatedStyle(() => ({
+    transform: [{ scaleY: thrust.value }, { scaleX: 0.8 + thrust.value * 0.2 }],
+    opacity: 0.55 + thrust.value * 0.35,
+  }));
+
+  const flash = boss.hitFlash > 0;
+  const rage = boss.rage;
+  const accent  = flash ? '#FFFFFF' : (rage ? '#FF0044' : '#FF00AA');
+  const accent2 = rage ? '#FFAA00' : '#BF00FF';
+  const accent3 = rage ? '#FFE000' : '#00E6FF';
+
+  // Hull "viewBox" is 120×120; the actual rendered size is bossSize.
+  const bossSize = boss.radius * 2.6;
+  const left = boss.x - bossSize / 2;
+  const top  = boss.y - bossSize / 2;
+
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', left, top, width: bossSize, height: bossSize }}>
+      {/* Outer halo glow */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          {
+            position: 'absolute',
+            left: -bossSize * 0.12, top: -bossSize * 0.12,
+            width: bossSize * 1.24, height: bossSize * 1.24,
+            borderRadius: bossSize * 0.62,
+            backgroundColor: accent + '22',
+            shadowColor: accent,
+            shadowOpacity: 1,
+            shadowRadius: bossSize * 0.55,
+            shadowOffset: { width: 0, height: 0 },
+            elevation: 14,
+          },
+          haloStyle,
+        ]}
+      />
+      {/* Twin thruster jets */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          {
+            position: 'absolute',
+            left: bossSize * 0.28, top: bossSize * 0.88,
+            width: bossSize * 0.14, height: bossSize * 0.35,
+            borderRadius: bossSize * 0.07,
+            overflow: 'hidden',
+          },
+          thrustStyle,
+        ]}
+      >
+        <LinearGradient
+          colors={['#FFFFFF', accent3, accent2, 'transparent']}
+          locations={[0, 0.3, 0.7, 1]}
+          start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }}
+          style={{ flex: 1 }}
+        />
+      </Animated.View>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          {
+            position: 'absolute',
+            left: bossSize * 0.58, top: bossSize * 0.88,
+            width: bossSize * 0.14, height: bossSize * 0.35,
+            borderRadius: bossSize * 0.07,
+            overflow: 'hidden',
+          },
+          thrustStyle,
+        ]}
+      >
+        <LinearGradient
+          colors={['#FFFFFF', accent3, accent2, 'transparent']}
+          locations={[0, 0.3, 0.7, 1]}
+          start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }}
+          style={{ flex: 1 }}
+        />
+      </Animated.View>
+
+      {/* Hull */}
+      <Svg width={bossSize} height={bossSize} viewBox="0 0 120 120" style={{ overflow: 'visible' }}>
+        <Defs>
+          <SvgLinearGradient id={`bossHull_${boss.id}`} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="1" />
+            <Stop offset="0.25" stopColor={accent}  stopOpacity="1" />
+            <Stop offset="1"    stopColor={accent2} stopOpacity="1" />
+          </SvgLinearGradient>
+          <SvgLinearGradient id={`bossWing_${boss.id}`} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={accent}  stopOpacity="0.95" />
+            <Stop offset="1" stopColor={accent2} stopOpacity="0.35" />
+          </SvgLinearGradient>
+          <SvgLinearGradient id={`bossCanopy_${boss.id}`} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="1" />
+            <Stop offset="1" stopColor={accent3} stopOpacity="0.75" />
+          </SvgLinearGradient>
+        </Defs>
+
+        {/* Outer swept wings */}
+        <Polygon points="6,82 60,55 60,95" fill={`url(#bossWing_${boss.id})`} stroke={accent} strokeWidth="1.5" />
+        <Polygon points="114,82 60,55 60,95" fill={`url(#bossWing_${boss.id})`} stroke={accent} strokeWidth="1.5" />
+        {/* Wing-tip beacons */}
+        <SvgCircle cx="6"   cy="82" r="3" fill="#FFFFFF" />
+        <SvgCircle cx="114" cy="82" r="3" fill="#FFFFFF" />
+        <SvgCircle cx="6"   cy="82" r="6" fill={accent3} opacity="0.55" />
+        <SvgCircle cx="114" cy="82" r="6" fill={accent3} opacity="0.55" />
+
+        {/* Mid hull plates */}
+        <Polygon points="32,72 60,42 88,72 78,98 42,98" fill={`url(#bossWing_${boss.id})`} stroke={accent} strokeWidth="1" opacity="0.85" />
+
+        {/* Main fuselage */}
+        <Polygon
+          points="60,4 36,60 42,92 60,86 78,92 84,60"
+          fill={`url(#bossHull_${boss.id})`}
+          stroke="#FFFFFF"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+
+        {/* Cockpit canopy */}
+        <Polygon points="60,18 50,46 60,54 70,46" fill={`url(#bossCanopy_${boss.id})`} opacity="0.95" />
+        <SvgCircle cx="60" cy="34" r="3.5" fill="#FFFFFF" />
+
+        {/* Hull spine accent */}
+        <Polygon points="58,6 60,88 62,6" fill={accent3} opacity="0.55" />
+
+        {/* Rage cross / phase mark */}
+        {rage && (
+          <>
+            <Polygon points="58,52 62,52 62,72 58,72" fill="#FFFF00" opacity="0.9" />
+            <Polygon points="50,60 70,60 70,64 50,64" fill="#FFFF00" opacity="0.9" />
+          </>
+        )}
+      </Svg>
     </View>
+  );
+});
+
+// ── Lightning bolt visual ────────────────────────────────────────────────────
+//
+// Renders the binary-tree chain as three layered polylines per segment
+// (wide purple glow, mid cyan, bright white core) plus expanding pulse rings
+// at each chain node to telegraph the splash propagation. The whole bolt
+// fades out linearly over LIGHTNING_LIFETIME_MS.
+//
+const LightningBoltView = memo(function LightningBoltView({ bolt }: { bolt: LightningBolt }) {
+  const op = useSharedValue(1);
+  useEffect(() => {
+    // First half: hot flash, then linear fade.
+    op.value = withSequence(
+      withTiming(1, { duration: 60 }),
+      withTiming(0, { duration: LIGHTNING_LIFETIME_MS - 60, easing: Easing.in(Easing.quad) }),
+    );
+  }, []);
+  const fade = useAnimatedStyle(() => ({ opacity: op.value }));
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, fade]}
+    >
+      <Svg width={width} height={height} style={{ position: 'absolute', left: 0, top: 0 }}>
+        {/* Pulse rings — telegraph the splash radius at each node */}
+        {bolt.pulses.map((p, i) => (
+          <PulseRing key={`pl_${i}`} cx={p.x} cy={p.y} radius={p.radius} depth={p.depth} />
+        ))}
+        {/* Bolt segments, three stacked strokes for an outer→core neon look */}
+        {bolt.segments.map((s, i) => {
+          const pts = s.points.map((pt) => `${pt.x},${pt.y}`).join(' ');
+          const depthAlpha = 1 - s.depth * 0.18;
+          return (
+            <React.Fragment key={`seg_${i}`}>
+              {/* Outer purple halo */}
+              <Polyline points={pts} stroke="#9D4EFF" strokeOpacity={0.55 * depthAlpha} strokeWidth={10} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              {/* Mid cyan blade */}
+              <Polyline points={pts} stroke="#00E6FF" strokeOpacity={0.9 * depthAlpha} strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              {/* Bright white core */}
+              <Polyline points={pts} stroke="#FFFFFF" strokeOpacity={depthAlpha} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </React.Fragment>
+          );
+        })}
+      </Svg>
+    </Animated.View>
+  );
+});
+
+const PulseRing = memo(function PulseRing({ cx, cy, radius, depth }: { cx: number; cy: number; radius: number; depth: number }) {
+  const scale = useSharedValue(0.25);
+  const op = useSharedValue(0.75);
+  useEffect(() => {
+    scale.value = withTiming(1, { duration: LIGHTNING_LIFETIME_MS, easing: Easing.out(Easing.quad) });
+    op.value = withSequence(
+      withTiming(0.85, { duration: 40 }),
+      withTiming(0, { duration: LIGHTNING_LIFETIME_MS - 40, easing: Easing.in(Easing.quad) }),
+    );
+  }, []);
+  const r = useAnimatedProps(() => ({ r: radius * scale.value })) as never;
+  const strokeAlpha = 0.9 - depth * 0.2;
+  return (
+    <>
+      <AnimatedSvgCircle
+        cx={cx} cy={cy}
+        animatedProps={r}
+        stroke="#00E6FF" strokeWidth={2.5} strokeOpacity={strokeAlpha} fill="none"
+      />
+      <AnimatedSvgCircle
+        cx={cx} cy={cy}
+        animatedProps={r}
+        stroke="#9D4EFF" strokeWidth={6} strokeOpacity={strokeAlpha * 0.5} fill="none"
+      />
+    </>
+  );
+});
+
+// ── Lightning ammo badge — left-side counter with a brief pop on replenish ──
+const LightningAmmoBadge = memo(function LightningAmmoBadge({ count, lastReplenishAt }: { count: number; lastReplenishAt: number }) {
+  const pop = useSharedValue(1);
+  useEffect(() => {
+    if (!lastReplenishAt) return;
+    pop.value = withSequence(
+      withTiming(1.35, { duration: 140, easing: Easing.out(Easing.cubic) }),
+      withSpring(1, { damping: 6, stiffness: 220 }),
+    );
+  }, [lastReplenishAt]);
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: pop.value }] }));
+  const dim = count <= 0;
+  return (
+    <Animated.View style={[styles.ammoBadge, style, dim && { opacity: 0.35 }]}>
+      <Text style={[styles.ammoIcon, { color: Colors.neon.cyan }]}>⚡</Text>
+      <Text style={[styles.ammoCount, { color: Colors.neon.cyan }]}>{count}</Text>
+      <Text style={styles.ammoHint}>TAP</Text>
+    </Animated.View>
   );
 });
 
@@ -1490,13 +1921,13 @@ const styles = StyleSheet.create({
 
   pProj: {
     position: 'absolute',
-    width: PROJECTILE_RADIUS * 2,
-    height: PROJECTILE_RADIUS * 6,
-    borderRadius: PROJECTILE_RADIUS,
+    width: PROJECTILE_VISUAL_W,
+    height: PROJECTILE_VISUAL_H,
+    borderRadius: PROJECTILE_VISUAL_W / 2,
     backgroundColor: Colors.neon.cyan,
     shadowColor: Colors.neon.cyan,
     shadowOpacity: 1,
-    shadowRadius: 6,
+    shadowRadius: 8,
     elevation: 6,
   },
   eProj: {
@@ -1635,6 +2066,32 @@ const styles = StyleSheet.create({
     gap: 8,
     zIndex: 25,
   },
+  // Lightning ammo HUD — bottom left, mirrored from inventory column
+  ammoColumn: {
+    position: 'absolute',
+    left: 12,
+    bottom: 90,
+    zIndex: 25,
+  },
+  ammoBadge: {
+    minWidth: 56,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: Colors.neon.cyan + 'AA',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    shadowColor: Colors.neon.cyan,
+    shadowOpacity: 0.9,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 10,
+    gap: 2,
+  },
+  ammoIcon: { fontSize: 20, fontWeight: '900', textShadowColor: Colors.neon.cyan, textShadowRadius: 8 },
+  ammoCount: { fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+  ammoHint: { fontSize: 9, fontWeight: '800', color: 'rgba(255,255,255,0.6)', letterSpacing: 2 },
   invBtn: {
     width: 48,
     height: 48,

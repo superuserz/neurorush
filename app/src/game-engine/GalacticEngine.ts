@@ -11,8 +11,10 @@ export const PLAYER_SHIELD_MAX = 50;
 export const PLAYER_RADIUS = 22;
 
 export const PROJECTILE_SPEED = 620;       // px/sec (player)
-export const PROJECTILE_RADIUS = 4;
-export const PROJECTILE_BASE_DAMAGE = 18;
+export const PROJECTILE_RADIUS = 4;        // collision radius (kept stable for hit-feel)
+export const PROJECTILE_VISUAL_W = 3;      // narrower visual than collision — slim laser look
+export const PROJECTILE_VISUAL_H = 22;
+export const PROJECTILE_BASE_DAMAGE = 12;  // lower at start; scales with stage in the tick
 export const PROJECTILE_BASE_FIRE_MS = 220; // ms between shots
 
 export const ENEMY_PROJ_SPEED = 280;
@@ -751,6 +753,220 @@ export function steerHomingProjectiles(
 
 // ── EMP active item ──────────────────────────────────────────────────────────
 export const EMP_DURATION_MS = 3000;
+
+// ── Lightning ammo ───────────────────────────────────────────────────────────
+//
+// Activated by a quick tap. Strikes the nearest enemy from the player ship,
+// then fans out in a binary-tree pattern: each hit enemy branches lightning
+// to its 2 nearest non-hit enemies (within LIGHTNING_BRANCH_RADIUS) up to
+// LIGHTNING_MAX_DEPTH levels. Damage falls off by LIGHTNING_FALLOFF per depth.
+// Unlocks at 50 kills with 3 charges; every +25 kills grants +3 (cap 10).
+//
+export const LIGHTNING_UNLOCK_KILLS = 50;
+export const LIGHTNING_REPLENISH_INTERVAL = 25;
+export const LIGHTNING_REPLENISH_AMOUNT = 3;
+export const LIGHTNING_MAX_CHARGES = 10;
+export const LIGHTNING_DAMAGE_BASE = 140;
+export const LIGHTNING_FALLOFF = 0.6;          // multiplier per depth level
+export const LIGHTNING_MAX_DEPTH = 3;          // root (0) + 2 levels of branches → up to 1+2+4=7 hits
+export const LIGHTNING_BRANCHES_PER_HIT = 2;   // binary tree
+export const LIGHTNING_BRANCH_RADIUS = 220;    // max px between hops
+export const LIGHTNING_LIFETIME_MS = 360;
+export const LIGHTNING_JAG_SEGMENTS = 6;       // points per jagged segment
+export const LIGHTNING_JAG_AMPLITUDE = 14;     // perpendicular jitter in px
+// Splash propagation: each chain hit also zaps enemies within this radius for
+// a fraction of the hit's damage, with a ring pulse rendered at the hit point.
+export const LIGHTNING_SPLASH_RADIUS = 72;
+export const LIGHTNING_SPLASH_DAMAGE_MULT = 0.35;
+
+export interface LightningSegment {
+  /** Endpoints. */
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** Depth from root (0 = ship→first enemy, 1 = first→branch, etc.) */
+  depth: number;
+  /** Jagged interpolation points along the segment, including endpoints. */
+  points: { x: number; y: number }[];
+}
+
+export interface LightningHit {
+  /** Either an enemy id or 'boss' if the bolt struck the boss. */
+  targetId: string;
+  damage: number;
+  /** Depth from root, for visual emphasis if desired. */
+  depth: number;
+  x: number;
+  y: number;
+  /** True if this is a splash victim (zapped by proximity to a chain node, not a direct hit). */
+  splash?: boolean;
+}
+
+/** A radial pulse rendered at each chain node — communicates the propagation. */
+export interface LightningPulse {
+  x: number;
+  y: number;
+  radius: number;
+  depth: number;
+}
+
+export interface LightningBolt {
+  id: string;
+  segments: LightningSegment[];
+  hits: LightningHit[];
+  pulses: LightningPulse[];
+  createdAt: number;
+}
+
+/**
+ * Build a jagged polyline between two points by inserting LIGHTNING_JAG_SEGMENTS
+ * intermediate points with perpendicular jitter.
+ */
+function jaggedPath(x1: number, y1: number, x2: number, y2: number): { x: number; y: number }[] {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  // Unit perpendicular (rotated 90° CCW).
+  const px = -dy / len;
+  const py = dx / len;
+  const steps = LIGHTNING_JAG_SEGMENTS;
+  const pts: { x: number; y: number }[] = [{ x: x1, y: y1 }];
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const cx = x1 + dx * t;
+    const cy = y1 + dy * t;
+    // Taper jitter near endpoints so the line locks onto target/source.
+    const taper = Math.sin(t * Math.PI);
+    const offset = (Math.random() - 0.5) * 2 * LIGHTNING_JAG_AMPLITUDE * taper;
+    pts.push({ x: cx + px * offset, y: cy + py * offset });
+  }
+  pts.push({ x: x2, y: y2 });
+  return pts;
+}
+
+interface ChainCandidate {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * Compute a lightning chain originating from (sourceX, sourceY). The bolt
+ * targets the nearest enemy/boss as its root, then each hit fans out to its
+ * LIGHTNING_BRANCHES_PER_HIT nearest non-visited neighbors within
+ * LIGHTNING_BRANCH_RADIUS. Returns the segments to render and the hits to
+ * apply (caller mutates enemy hp).
+ */
+export function computeLightningChain(
+  sourceX: number,
+  sourceY: number,
+  enemies: Enemy[],
+  bossX: number | null,
+  bossY: number | null,
+  bossRadius: number | null,
+): { segments: LightningSegment[]; hits: LightningHit[]; pulses: LightningPulse[] } | null {
+  // Build a flat candidate list (enemies + boss) keyed by id.
+  const all: ChainCandidate[] = enemies.map((e) => ({ id: e.id, x: e.x, y: e.y }));
+  if (bossX !== null && bossY !== null) all.push({ id: 'boss', x: bossX, y: bossY });
+  if (all.length === 0) return null;
+
+  // Root: nearest candidate to the source.
+  let rootIdx = -1;
+  let rootD = Infinity;
+  for (let i = 0; i < all.length; i++) {
+    const d = (all[i].x - sourceX) ** 2 + (all[i].y - sourceY) ** 2;
+    if (d < rootD) { rootD = d; rootIdx = i; }
+  }
+  if (rootIdx < 0) return null;
+
+  const visited = new Set<string>();
+  const segments: LightningSegment[] = [];
+  const hits: LightningHit[] = [];
+  const pulses: LightningPulse[] = [];
+
+  const root = all[rootIdx];
+  visited.add(root.id);
+  segments.push({
+    x1: sourceX, y1: sourceY, x2: root.x, y2: root.y, depth: 0,
+    points: jaggedPath(sourceX, sourceY, root.x, root.y),
+  });
+  hits.push({ targetId: root.id, damage: LIGHTNING_DAMAGE_BASE, depth: 0, x: root.x, y: root.y });
+  pulses.push({ x: root.x, y: root.y, radius: LIGHTNING_SPLASH_RADIUS, depth: 0 });
+
+  // BFS expansion. Each level multiplies branches by LIGHTNING_BRANCHES_PER_HIT.
+  let frontier: ChainCandidate[] = [root];
+  for (let depth = 1; depth < LIGHTNING_MAX_DEPTH; depth++) {
+    const nextFrontier: ChainCandidate[] = [];
+    const damage = LIGHTNING_DAMAGE_BASE * Math.pow(LIGHTNING_FALLOFF, depth);
+    for (const src of frontier) {
+      // Find this hop's K nearest non-visited candidates within branch radius.
+      const sorted = all
+        .filter((c) => !visited.has(c.id))
+        .map((c) => ({ c, d: Math.hypot(c.x - src.x, c.y - src.y) }))
+        .filter((row) => row.d < LIGHTNING_BRANCH_RADIUS)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, LIGHTNING_BRANCHES_PER_HIT);
+      for (const { c } of sorted) {
+        visited.add(c.id);
+        segments.push({
+          x1: src.x, y1: src.y, x2: c.x, y2: c.y, depth,
+          points: jaggedPath(src.x, src.y, c.x, c.y),
+        });
+        hits.push({ targetId: c.id, damage, depth, x: c.x, y: c.y });
+        pulses.push({ x: c.x, y: c.y, radius: LIGHTNING_SPLASH_RADIUS, depth });
+        nextFrontier.push(c);
+      }
+    }
+    if (nextFrontier.length === 0) break;
+    frontier = nextFrontier;
+  }
+
+  // ── Splash propagation: each chain-node pulse zaps nearby unvisited enemies.
+  // Each enemy can be splashed at most once; we record the strongest splash
+  // (closest depth = highest damage).
+  const splashByTarget = new Map<string, LightningHit>();
+  for (const pulse of pulses) {
+    const pulseDamage = LIGHTNING_DAMAGE_BASE * Math.pow(LIGHTNING_FALLOFF, pulse.depth) * LIGHTNING_SPLASH_DAMAGE_MULT;
+    for (const c of all) {
+      if (visited.has(c.id)) continue;
+      const d = Math.hypot(c.x - pulse.x, c.y - pulse.y);
+      if (d > LIGHTNING_SPLASH_RADIUS) continue;
+      const prev = splashByTarget.get(c.id);
+      if (!prev || prev.damage < pulseDamage) {
+        splashByTarget.set(c.id, {
+          targetId: c.id,
+          damage: pulseDamage,
+          depth: pulse.depth + 1,
+          x: c.x, y: c.y,
+          splash: true,
+        });
+      }
+    }
+  }
+  hits.push(...splashByTarget.values());
+
+  return { segments, hits, pulses };
+}
+
+export function makeLightningBolt(
+  sourceX: number,
+  sourceY: number,
+  enemies: Enemy[],
+  bossX: number | null,
+  bossY: number | null,
+  bossRadius: number | null,
+): LightningBolt | null {
+  const chain = computeLightningChain(sourceX, sourceY, enemies, bossX, bossY, bossRadius);
+  if (!chain) return null;
+  return {
+    id: nextId('lt'),
+    segments: chain.segments,
+    hits: chain.hits,
+    pulses: chain.pulses,
+    createdAt: Date.now(),
+  };
+}
 
 // ── Card pool for pick-1-of-3 between-stage screen ───────────────────────────
 import type { RunBuffs, RunInventory } from '../stores/useGalacticStore';

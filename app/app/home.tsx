@@ -20,6 +20,7 @@ import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { api } from '../src/services/api';
 import { GoogleSignInBlock } from '../src/components/auth/GoogleSignInBlock';
+import { notifyError } from '../src/utils/notify';
 import { Colors, Spacing } from '../src/theme';
 
 const { width, height } = Dimensions.get('window');
@@ -128,14 +129,18 @@ export default function HomeScreen() {
     setSigningIn(true);
     try {
       const { token, user } = await api.googleAuth(idToken);
+      if (!user?.userId || !user?.username) {
+        throw new Error(`Backend returned malformed user payload: ${JSON.stringify(user)}`);
+      }
       await signIn(token, {
         userId: user.userId,
         username: user.username,
         email: user.email,
         avatar: user.avatar,
       });
-    } catch {
-      Alert.alert('Sign-in failed', 'Please try again.');
+    } catch (err) {
+      console.error('[home] Google sign-in failed:', err);
+      notifyError('Sign-in failed', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setSigningIn(false);
     }

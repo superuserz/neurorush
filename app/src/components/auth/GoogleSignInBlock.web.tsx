@@ -15,10 +15,14 @@ export function GoogleSignInBlock({ onIdToken, signingIn, caption, size = 'sm' }
     <View style={[styles.wrap, size === 'lg' && styles.wrapLg, signingIn && styles.disabled]}>
       <GoogleLogin
         onSuccess={(resp) => {
-          if (resp.credential) onIdToken(resp.credential);
+          if (!resp.credential) {
+            console.warn('[GoogleSignInBlock] onSuccess fired without credential', resp);
+            return;
+          }
+          onIdToken(resp.credential);
         }}
         onError={() => {
-          // user closed prompt / cancelled — no-op
+          console.warn('[GoogleSignInBlock] GoogleLogin onError fired (user cancelled or popup blocked)');
         }}
         theme="filled_black"
         shape="pill"

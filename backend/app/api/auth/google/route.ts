@@ -38,19 +38,29 @@ export async function POST(req: NextRequest) {
         audience,
       });
       payload = ticket.getPayload();
-    } catch {
-      return NextResponse.json({ error: 'Invalid Google token' }, { status: 401 });
+    } catch (err) {
+      console.error('[POST /api/auth/google] verifyIdToken failed:', err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        { error: 'Invalid Google token', detail: err instanceof Error ? err.message : 'verifyIdToken failed' },
+        { status: 401 }
+      );
     }
 
-    if (
-      !payload ||
-      !payload.sub ||
-      !payload.email ||
-      payload.email_verified !== true ||
-      !payload.iss ||
-      !VALID_ISSUERS.has(payload.iss)
-    ) {
-      return NextResponse.json({ error: 'Invalid Google profile' }, { status: 401 });
+    if (!payload) {
+      console.error('[POST /api/auth/google] verifyIdToken returned no payload');
+      return NextResponse.json({ error: 'Invalid Google profile', detail: 'no payload' }, { status: 401 });
+    }
+    if (!payload.iss || !VALID_ISSUERS.has(payload.iss)) {
+      console.error('[POST /api/auth/google] invalid iss:', payload.iss);
+      return NextResponse.json({ error: 'Invalid Google profile', detail: `bad iss: ${payload.iss}` }, { status: 401 });
+    }
+    if (!payload.sub || !payload.email) {
+      console.error('[POST /api/auth/google] missing sub/email:', { sub: payload.sub, email: payload.email });
+      return NextResponse.json({ error: 'Invalid Google profile', detail: 'missing sub/email' }, { status: 401 });
+    }
+    if (payload.email_verified !== true) {
+      console.error('[POST /api/auth/google] email not verified:', payload.email);
+      return NextResponse.json({ error: 'Invalid Google profile', detail: 'email not verified' }, { status: 401 });
     }
 
     const googleId = payload.sub;

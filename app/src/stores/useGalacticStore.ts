@@ -1,5 +1,9 @@
 import { create } from 'zustand';
-import { PLAYER_BASE_HP, PLAYER_SHIELD_MAX, FEVER_THRESHOLD } from '../game-engine/GalacticEngine';
+import {
+  PLAYER_BASE_HP, PLAYER_SHIELD_MAX, FEVER_THRESHOLD,
+  LIGHTNING_UNLOCK_KILLS, LIGHTNING_REPLENISH_INTERVAL,
+  LIGHTNING_REPLENISH_AMOUNT, LIGHTNING_MAX_CHARGES,
+} from '../game-engine/GalacticEngine';
 
 export interface GalacticSession {
   hp: number;
@@ -40,6 +44,14 @@ export interface RunInventory {
   drone: number;
 }
 
+// Alt-ammo state. Charges replenish at kill milestones (see incrementKill).
+export interface AmmoState {
+  lightningCharges: number;
+  lightningUnlocked: boolean;
+  /** Set to a Date.now() when a new milestone fired; UI listens to flash a banner. */
+  lastReplenishAt: number;
+}
+
 interface GalacticState {
   session: GalacticSession;
   isPlaying: boolean;
@@ -47,6 +59,7 @@ interface GalacticState {
   active: ActivePowerUps;
   buffs: RunBuffs;
   inventory: RunInventory;
+  ammo: AmmoState;
 
   startGame: () => void;
   endGame: () => void;
@@ -68,6 +81,7 @@ interface GalacticState {
   applyBuff: (key: keyof RunBuffs, delta: number) => void;
   addInventory: (key: keyof RunInventory, n: number) => void;
   consumeInventory: (key: keyof RunInventory) => boolean;
+  consumeLightning: () => boolean;
 }
 
 const initial: GalacticSession = {
@@ -107,6 +121,12 @@ const initialInventory: RunInventory = {
   drone: 0,
 };
 
+const initialAmmo: AmmoState = {
+  lightningCharges: 0,
+  lightningUnlocked: false,
+  lastReplenishAt: 0,
+};
+
 // Caps to keep buff stacking sane
 const BUFF_CAPS: Partial<Record<keyof RunBuffs, number>> = {
   spreadCount: 6,
@@ -121,6 +141,7 @@ export const useGalacticStore = create<GalacticState>((set, get) => ({
   active: { ...initialPowers },
   buffs: { ...initialBuffs },
   inventory: { ...initialInventory },
+  ammo: { ...initialAmmo },
 
   startGame: () => set({
     session: { ...initial },
@@ -129,6 +150,7 @@ export const useGalacticStore = create<GalacticState>((set, get) => ({
     active: { ...initialPowers },
     buffs: { ...initialBuffs },
     inventory: { ...initialInventory },
+    ammo: { ...initialAmmo },
   }),
 
   endGame: () => set({ isPlaying: false }),
@@ -184,9 +206,30 @@ export const useGalacticStore = create<GalacticState>((set, get) => ({
     session: { ...s.session, coins: s.session.coins + n },
   })),
 
-  incrementKill: () => set((s) => ({
-    session: { ...s.session, kills: s.session.kills + 1 },
-  })),
+  incrementKill: () => set((s) => {
+    const kills = s.session.kills + 1;
+    // Lightning ammo: unlock at LIGHTNING_UNLOCK_KILLS, replenish every
+    // LIGHTNING_REPLENISH_INTERVAL kills after that, capped at LIGHTNING_MAX_CHARGES.
+    let ammo = s.ammo;
+    if (!ammo.lightningUnlocked && kills >= LIGHTNING_UNLOCK_KILLS) {
+      ammo = {
+        lightningUnlocked: true,
+        lightningCharges: Math.min(LIGHTNING_MAX_CHARGES, LIGHTNING_REPLENISH_AMOUNT),
+        lastReplenishAt: Date.now(),
+      };
+    } else if (
+      ammo.lightningUnlocked &&
+      kills > LIGHTNING_UNLOCK_KILLS &&
+      (kills - LIGHTNING_UNLOCK_KILLS) % LIGHTNING_REPLENISH_INTERVAL === 0
+    ) {
+      ammo = {
+        ...ammo,
+        lightningCharges: Math.min(LIGHTNING_MAX_CHARGES, ammo.lightningCharges + LIGHTNING_REPLENISH_AMOUNT),
+        lastReplenishAt: Date.now(),
+      };
+    }
+    return { session: { ...s.session, kills }, ammo };
+  }),
 
   incrementBossKill: () => set((s) => ({
     session: { ...s.session, bossKills: s.session.bossKills + 1 },
@@ -248,6 +291,13 @@ export const useGalacticStore = create<GalacticState>((set, get) => ({
     const s = get();
     if (s.inventory[key] <= 0) return false;
     set({ inventory: { ...s.inventory, [key]: s.inventory[key] - 1 } });
+    return true;
+  },
+
+  consumeLightning: () => {
+    const s = get();
+    if (!s.ammo.lightningUnlocked || s.ammo.lightningCharges <= 0) return false;
+    set({ ammo: { ...s.ammo, lightningCharges: s.ammo.lightningCharges - 1 } });
     return true;
   },
 }));
