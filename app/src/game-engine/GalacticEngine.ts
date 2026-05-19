@@ -763,9 +763,9 @@ export const EMP_DURATION_MS = 3000;
 // Unlocks at 50 kills with 3 charges; every +25 kills grants +3 (cap 10).
 //
 export const LIGHTNING_UNLOCK_KILLS = 50;
-export const LIGHTNING_REPLENISH_INTERVAL = 25;
-export const LIGHTNING_REPLENISH_AMOUNT = 3;
-export const LIGHTNING_MAX_CHARGES = 10;
+export const LIGHTNING_REPLENISH_INTERVAL = 50;
+export const LIGHTNING_REPLENISH_AMOUNT = 2;
+export const LIGHTNING_MAX_CHARGES = 6;
 export const LIGHTNING_DAMAGE_BASE = 140;
 export const LIGHTNING_FALLOFF = 0.6;          // multiplier per depth level
 export const LIGHTNING_MAX_DEPTH = 3;          // root (0) + 2 levels of branches → up to 1+2+4=7 hits

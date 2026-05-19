@@ -613,8 +613,9 @@ export default function GalacticScreen() {
         const baseDmg = PROJECTILE_BASE_DAMAGE + Math.floor(stageRef.current * 0.7);
         const dmg = Math.round(baseDmg * liveBuffs.damageMult);
         const pierce = liveBuffs.pierceLevel;
-        // Multishot stacks with rapid-fire / fever
-        const spreadBase = (liveActive.rapidFire > 0 || feverRef.current) ? 3 : 1;
+        // Multishot stacks with rapid-fire / fever (base 2 during those modes;
+        // the spreadCount buff card lets players stack higher if chosen)
+        const spreadBase = (liveActive.rapidFire > 0 || feverRef.current) ? 2 : 1;
         const spreadCount = Math.max(spreadBase, liveBuffs.spreadCount);
         let shots: PlayerProjectile[];
         if (spreadCount > 1) {
