@@ -778,6 +778,9 @@ export const LIGHTNING_JAG_AMPLITUDE = 14;     // perpendicular jitter in px
 // a fraction of the hit's damage, with a ring pulse rendered at the hit point.
 export const LIGHTNING_SPLASH_RADIUS = 72;
 export const LIGHTNING_SPLASH_DAMAGE_MULT = 0.35;
+// Boss takes reduced damage from lightning (thicker hull) and is excluded from
+// splash propagation so chain spam can't trivialize boss fights.
+export const LIGHTNING_BOSS_DAMAGE_MULT = 0.35;
 
 export interface LightningSegment {
   /** Endpoints. */
@@ -891,7 +894,9 @@ export function computeLightningChain(
     x1: sourceX, y1: sourceY, x2: root.x, y2: root.y, depth: 0,
     points: jaggedPath(sourceX, sourceY, root.x, root.y),
   });
-  hits.push({ targetId: root.id, damage: LIGHTNING_DAMAGE_BASE, depth: 0, x: root.x, y: root.y });
+  const rootDmg = LIGHTNING_DAMAGE_BASE * (root.id === 'boss' ? LIGHTNING_BOSS_DAMAGE_MULT : 1);
+  hits.push({ targetId: root.id, damage: rootDmg, depth: 0, x: root.x, y: root.y });
+  // Splash ring still renders for visual continuity, but boss is excluded from splash damage below.
   pulses.push({ x: root.x, y: root.y, radius: LIGHTNING_SPLASH_RADIUS, depth: 0 });
 
   // BFS expansion. Each level multiplies branches by LIGHTNING_BRANCHES_PER_HIT.
@@ -913,7 +918,8 @@ export function computeLightningChain(
           x1: src.x, y1: src.y, x2: c.x, y2: c.y, depth,
           points: jaggedPath(src.x, src.y, c.x, c.y),
         });
-        hits.push({ targetId: c.id, damage, depth, x: c.x, y: c.y });
+        const dmg = damage * (c.id === 'boss' ? LIGHTNING_BOSS_DAMAGE_MULT : 1);
+        hits.push({ targetId: c.id, damage: dmg, depth, x: c.x, y: c.y });
         pulses.push({ x: c.x, y: c.y, radius: LIGHTNING_SPLASH_RADIUS, depth });
         nextFrontier.push(c);
       }
@@ -923,13 +929,13 @@ export function computeLightningChain(
   }
 
   // ── Splash propagation: each chain-node pulse zaps nearby unvisited enemies.
-  // Each enemy can be splashed at most once; we record the strongest splash
-  // (closest depth = highest damage).
+  // Boss is excluded from splash so lightning chain spam can't trivialize boss
+  // fights — boss only takes direct (already-nerfed) chain damage.
   const splashByTarget = new Map<string, LightningHit>();
   for (const pulse of pulses) {
     const pulseDamage = LIGHTNING_DAMAGE_BASE * Math.pow(LIGHTNING_FALLOFF, pulse.depth) * LIGHTNING_SPLASH_DAMAGE_MULT;
     for (const c of all) {
-      if (visited.has(c.id)) continue;
+      if (visited.has(c.id) || c.id === 'boss') continue;
       const d = Math.hypot(c.x - pulse.x, c.y - pulse.y);
       if (d > LIGHTNING_SPLASH_RADIUS) continue;
       const prev = splashByTarget.get(c.id);

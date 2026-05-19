@@ -1445,7 +1445,10 @@ const BossView = memo(function BossView({ boss }: { boss: Boss }) {
   const accent3 = rage ? '#FFE000' : '#00E6FF';
 
   // Hull "viewBox" is 120×120; the actual rendered size is bossSize.
-  const bossSize = boss.radius * 2.6;
+  // Match the collision diameter so the hitbox feels honest — bullets hit
+  // when they reach the visible hull. Halo glow extends a bit beyond for visual
+  // weight but doesn't affect hit-feel.
+  const bossSize = boss.radius * 2.0;
   const left = boss.x - bossSize / 2;
   const top  = boss.y - bossSize / 2;
 
