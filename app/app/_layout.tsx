@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { configureGoogleSignIn } from '../src/services/googleAuth';
+import { WebOAuthProvider } from '../src/components/auth/WebOAuthProvider';
 
 const queryClient = new QueryClient();
 configureGoogleSignIn();
@@ -21,6 +22,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <WebOAuthProvider>
       <QueryClientProvider client={queryClient}>
         <StatusBar style="light" />
         <Stack
@@ -43,6 +45,7 @@ export default function RootLayout() {
           <Stack.Screen name="profile" />
         </Stack>
       </QueryClientProvider>
+      </WebOAuthProvider>
     </GestureHandlerRootView>
   );
 }

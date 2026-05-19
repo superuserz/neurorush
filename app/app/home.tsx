@@ -19,7 +19,7 @@ import { NeonText, GradientButton, CoinDisplay, TiltCard } from '../src/componen
 import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { api } from '../src/services/api';
-import { googleSignIn } from '../src/services/googleAuth';
+import { GoogleSignInBlock } from '../src/components/auth/GoogleSignInBlock';
 import { Colors, Spacing } from '../src/theme';
 
 const { width, height } = Dimensions.get('window');
@@ -123,13 +123,11 @@ export default function HomeScreen() {
   const { isSignedIn, user: googleUser, signIn } = useAuthStore();
   const [signingIn, setSigningIn] = useState(false);
 
-  const handleGoogleSignIn = async () => {
+  const handleIdToken = async (idToken: string) => {
     if (signingIn) return;
     setSigningIn(true);
     try {
-      const result = await googleSignIn();
-      if (!result) return; // user cancelled
-      const { token, user } = await api.googleAuth(result.idToken);
+      const { token, user } = await api.googleAuth(idToken);
       await signIn(token, {
         userId: user.userId,
         username: user.username,
@@ -237,17 +235,12 @@ export default function HomeScreen() {
                 <NeonText size="xs" color={Colors.neon.cyan}>✓ Leaderboard linked · {googleUser?.email}</NeonText>
               </View>
             ) : (
-              <TouchableOpacity
-                style={styles.googleSignInBtn}
-                onPress={handleGoogleSignIn}
-                disabled={signingIn}
-                activeOpacity={0.75}
-              >
-                <NeonText size="sm" bold color={Colors.white}>
-                  {signingIn ? '⏳ Signing in...' : '🔐  Sign in with Google'}
-                </NeonText>
-                <NeonText size="xs" color="rgba(255,255,255,0.55)">to appear on the leaderboard</NeonText>
-              </TouchableOpacity>
+              <GoogleSignInBlock
+                onIdToken={handleIdToken}
+                signingIn={signingIn}
+                caption="to appear on the leaderboard"
+                size="sm"
+              />
             )}
           </Animated.View>
 

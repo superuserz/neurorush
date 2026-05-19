@@ -13,6 +13,9 @@ export interface GoogleSignInResult {
 let configured = false;
 
 export function configureGoogleSignIn() {
+  // Web uses @react-oauth/google via <WebOAuthProvider> / <GoogleSignInBlock>;
+  // this module is only meaningful on native.
+  if (Platform.OS === 'web') return;
   if (configured) return;
   GoogleSignin.configure({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
@@ -38,10 +41,7 @@ function toResult(payload: GoogleUserPayload): GoogleSignInResult | null {
 
 export async function googleSignIn(): Promise<GoogleSignInResult | null> {
   if (Platform.OS === 'web') {
-    // Web build of the lib returns a User directly (resolved via Metro's .web.ts);
-    // native types don't reflect that, hence the cast.
-    const payload = (await GoogleSignin.signIn()) as unknown as GoogleUserPayload;
-    return toResult(payload);
+    throw new Error('Web sign-in uses <GoogleSignInBlock>; do not call googleSignIn() on web.');
   }
   const response = await GoogleSignin.signIn();
   if (!isSuccessResponse(response)) return null;
@@ -49,6 +49,7 @@ export async function googleSignIn(): Promise<GoogleSignInResult | null> {
 }
 
 export async function googleSignOut() {
+  if (Platform.OS === 'web') return;
   try {
     await GoogleSignin.signOut();
   } catch {

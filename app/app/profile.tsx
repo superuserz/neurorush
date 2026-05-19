@@ -8,7 +8,8 @@ import { NeonText, NeonCard, GradientButton, CoinDisplay } from '../src/componen
 import { useUserStore } from '../src/stores/useUserStore';
 import { useAuthStore } from '../src/stores/useAuthStore';
 import { api } from '../src/services/api';
-import { googleSignIn, googleSignOut } from '../src/services/googleAuth';
+import { googleSignOut } from '../src/services/googleAuth';
+import { GoogleSignInBlock } from '../src/components/auth/GoogleSignInBlock';
 import { Colors, Spacing } from '../src/theme';
 
 const ACHIEVEMENTS = [
@@ -26,13 +27,11 @@ export default function ProfileScreen() {
   const { isSignedIn, user: googleUser, signIn, signOut } = useAuthStore();
   const [signingIn, setSigningIn] = useState(false);
 
-  const handleSignIn = async () => {
+  const handleIdToken = async (idToken: string) => {
     if (signingIn) return;
     setSigningIn(true);
     try {
-      const result = await googleSignIn();
-      if (!result) return;
-      const { token, user } = await api.googleAuth(result.idToken);
+      const { token, user } = await api.googleAuth(idToken);
       await signIn(token, {
         userId: user.userId,
         username: user.username,
@@ -89,19 +88,12 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </View>
             ) : (
-              <TouchableOpacity
-                style={[styles.googleBtn, signingIn && styles.googleBtnDisabled]}
-                onPress={handleSignIn}
-                disabled={signingIn}
-                activeOpacity={0.75}
-              >
-                <NeonText size="lg" bold color={Colors.white}>
-                  {signingIn ? '⏳ Signing in...' : '🔐  Sign in with Google'}
-                </NeonText>
-                <NeonText size="xs" color="rgba(255,255,255,0.6)" style={{ textAlign: 'center' }}>
-                  Track your scores on the global leaderboard
-                </NeonText>
-              </TouchableOpacity>
+              <GoogleSignInBlock
+                onIdToken={handleIdToken}
+                signingIn={signingIn}
+                caption="Track your scores on the global leaderboard"
+                size="lg"
+              />
             )}
           </Animated.View>
 
